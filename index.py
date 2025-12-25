@@ -2,9 +2,48 @@ from http.server import BaseHTTPRequestHandler
 from playwright.sync_api import sync_playwright
 import json
 import base64
+import os
+import subprocess
 
 VIEWPORT_WIDTH = 1024
 VIEWPORT_HEIGHT = 800
+
+# Auto-install Playwright browsers on first run
+def ensure_playwright_browsers():
+    """Install Playwright browsers if not already installed"""
+    try:
+        # Check if chromium is installed
+        from playwright._impl._driver import compute_driver_executable
+        driver_executable = compute_driver_executable()
+        
+        # Try to get browser path
+        result = subprocess.run(
+            [driver_executable, "print-browser-paths"],
+            capture_output=True,
+            text=True
+        )
+        
+        if "chromium" not in result.stdout:
+            # Install chromium
+            subprocess.run(
+                ["playwright", "install", "chromium", "--with-deps"],
+                check=True
+            )
+    except Exception as e:
+        # Fallback: just try to install
+        try:
+            subprocess.run(
+                ["playwright", "install", "chromium", "--with-deps"],
+                check=True
+            )
+        except:
+            pass
+
+# Install browsers on module load
+try:
+    ensure_playwright_browsers()
+except:
+    pass
 
 class handler(BaseHTTPRequestHandler):
     
@@ -18,7 +57,9 @@ class handler(BaseHTTPRequestHandler):
                         "--no-sandbox",
                         "--disable-dev-shm-usage",
                         "--disable-gpu",
-                        "--disable-setuid-sandbox"
+                        "--disable-setuid-sandbox",
+                        "--single-process",
+                        "--no-zygote"
                     ]
                 )
 
