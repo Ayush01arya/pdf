@@ -1,53 +1,16 @@
 from flask import Flask, request, send_file, jsonify
-from pyppeteer import launch
-import asyncio
+import requests
 import io
-import os
 
 app = Flask(__name__)
 
 VIEWPORT_WIDTH = 1024
 VIEWPORT_HEIGHT = 800
 
-async def html_to_pdf_async(html_content: str) -> bytes:
-    """Convert HTML string to PDF bytes"""
-    browser = await launch(
-        headless=True,
-        args=[
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-gpu'
-        ]
-    )
-    
-    page = await browser.newPage()
-    await page.setViewport({
-        'width': VIEWPORT_WIDTH,
-        'height': VIEWPORT_HEIGHT
-    })
-    
-    # Set HTML content
-    await page.setContent(html_content, {'waitUntil': 'networkidle0'})
-    
-    # Get content height
-    content_height = await page.evaluate('document.body.scrollHeight')
-    
-    # Generate PDF
-    pdf_bytes = await page.pdf({
-        'width': f'{VIEWPORT_WIDTH}px',
-        'height': f'{content_height}px',
-        'printBackground': True,
-        'scale': 1
-    })
-    
-    await browser.close()
-    return pdf_bytes
-
 @app.route('/api/html-to-pdf', methods=['POST'])
 def convert_html_to_pdf():
     """
-    API endpoint to convert HTML to PDF
+    Convert HTML to PDF using external service (optimized for Vercel Free Plan)
     
     Request body (JSON):
     {
@@ -56,7 +19,6 @@ def convert_html_to_pdf():
     }
     """
     try:
-        # Get JSON data
         data = request.get_json()
         
         if not data or 'html' not in data:
@@ -67,27 +29,57 @@ def convert_html_to_pdf():
         html_content = data['html']
         filename = data.get('filename', 'document.pdf')
         
-        # Ensure filename ends with .pdf
         if not filename.endswith('.pdf'):
             filename += '.pdf'
         
-        # Convert HTML to PDF
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        pdf_bytes = loop.run_until_complete(html_to_pdf_async(html_content))
-        loop.close()
-        
-        # Create BytesIO object
-        pdf_io = io.BytesIO(pdf_bytes)
-        pdf_io.seek(0)
-        
-        # Return PDF file
-        return send_file(
-            pdf_io,
-            mimetype='application/pdf',
-            as_attachment=True,
-            download_name=filename
+        # Using api.html2pdf.app with custom viewport dimensions
+        response = requests.post(
+            'https://api.html2pdf.app/v1/generate',
+            json={
+                'html': html_content,
+                'engine': 'chrome',
+                'options': {
+                    'viewport': {
+                        'width': VIEWPORT_WIDTH,
+                        'height': VIEWPORT_HEIGHT
+                    },
+                    'width': f'{VIEWPORT_WIDTH}px',
+                    'printBackground': True,
+                    'preferCSSPageSize': False,
+                    'displayHeaderFooter': False,
+                    'margin': {
+                        'top': '0',
+                        'right': '0',
+                        'bottom': '0',
+                        'left': '0'
+                    }
+                }
+            },
+            headers={'Content-Type': 'application/json'},
+            timeout=8
         )
+        
+        if response.status_code == 200:
+            pdf_io = io.BytesIO(response.content)
+            pdf_io.seek(0)
+            
+            return send_file(
+                pdf_io,
+                mimetype='application/pdf',
+                as_attachment=True,
+                download_name=filename
+            )
+        else:
+            return jsonify({
+                'error': 'PDF generation failed',
+                'status': response.status_code,
+                'details': response.text
+            }), 500
+    
+    except requests.Timeout:
+        return jsonify({
+            'error': 'Request timeout - HTML might be too large or complex'
+        }), 504
     
     except Exception as e:
         return jsonify({
@@ -99,30 +91,45 @@ def health_check():
     """Health check endpoint"""
     return jsonify({
         'status': 'ok',
-        'message': 'HTML to PDF API is running'
+        'message': 'HTML to PDF API is running',
+        'viewport': {
+            'width': VIEWPORT_WIDTH,
+            'height': VIEWPORT_HEIGHT
+        },
+        'plan': 'Vercel Free (Hobby)',
+        'limits': {
+            'memory': '1024 MB',
+            'timeout': '10 seconds'
+        }
     })
 
 @app.route('/', methods=['GET'])
 def home():
-    """Home page with API documentation"""
+    """API documentation"""
     return jsonify({
         'name': 'HTML to PDF API',
         'version': '1.0.0',
+        'viewport': f'{VIEWPORT_WIDTH}x{VIEWPORT_HEIGHT}',
         'endpoints': {
             'POST /api/html-to-pdf': {
-                'description': 'Convert HTML to PDF',
+                'description': f'Convert HTML to PDF with {VIEWPORT_WIDTH}x{VIEWPORT_HEIGHT} viewport',
                 'body': {
-                    'html': 'string (required) - HTML content',
-                    'filename': 'string (optional) - Output filename'
+                    'html': 'string (required) - Complete HTML content with CSS/JS',
+                    'filename': 'string (optional) - Output filename (default: document.pdf)'
                 },
                 'example': {
-                    'html': '<!DOCTYPE html><html>...</html>',
+                    'html': '<!DOCTYPE html><html><head><style>body{font-family:Arial;}</style></head><body><h1>Hello World</h1></body></html>',
                     'filename': 'report.pdf'
-                }
+                },
+                'response': 'PDF file download'
             },
             'GET /api/health': {
-                'description': 'Health check endpoint'
+                'description': 'Health check endpoint',
+                'response': 'API status, viewport dimensions, and limits'
             }
+        },
+        'usage': {
+            'curl': 'curl -X POST https://your-app.vercel.app/api/html-to-pdf -H "Content-Type: application/json" -d \'{"html":"<html><body><h1>Test</h1></body></html>"}\' --output result.pdf'
         }
     })
 
